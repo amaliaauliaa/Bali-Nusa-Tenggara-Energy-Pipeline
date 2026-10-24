@@ -1,72 +1,86 @@
 # Bali–Nusa Tenggara Energy Pipeline
 
-This pipeline retrieves hourly weather data for 10 locations across Bali, West Nusa Tenggara, and East Nusa Tenggara. Solar radiation, cloud cover, temperature, and wind speed are provided as supporting data for energy analysis.
+This pipeline collects hourly weather data for 10 locations across Bali, West Nusa Tenggara, and East Nusa Tenggara. Solar radiation, cloud cover, temperature, and wind speed are available as supporting variables for energy analysis.
 
-> **Important: the data produced by this pipeline is forecast data, not historical observational data.** Forecast values and their time range may change each time data is fetched as Open-Meteo updates its weather models.
 
-## Data source
 
-- **Provider:** [Open-Meteo Forecast API](https://open-meteo.com/en/docs)
-- **Endpoint:** `https://api.open-meteo.com/v1/forecast`
-- **Frequency:** hourly (`hourly`)
-- **Timezone:** `Asia/Makassar`
-- **Locations:** Denpasar, Jembrana, Mataram, Sumbawa Besar, Bima, Ruteng, Maumere, Waikabubak, Kupang, and Atambua. Their coordinates are defined in [`src/locations.py`](src/locations.py).
-- **Time coverage:** follows the API's default forecast range because the pipeline does not set `forecast_days` or `past_days` parameters.
+## Data sources and modes
 
-The API returns elevation information for each coordinate. Raw and cleaned data are stored in SQLite tables.
+| Mode | API | Data type | How to run |
+|---|---|---|---|
+| `forecast` (default) | [Open-Meteo Forecast API](https://open-meteo.com/en/docs) — `https://api.open-meteo.com/v1/forecast` | Forecast | `python -m src.pipeline` |
+| `backfill` | [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api) — `https://archive-api.open-meteo.com/v1/archive` | Historical archive observations/reanalysis | `python -m src.pipeline --mode backfill --start YYYY-MM-DD --end YYYY-MM-DD` |
+
+Both modes request hourly data in the `Asia/Makassar` timezone for the locations listed in [`src/locations.py`](src/locations.py): Denpasar, Jembrana, Mataram, Sumbawa Besar, Bima, Ruteng, Maumere, Waikabubak, Kupang, and Atambua.
+
+The archive data has a delay: the pipeline considers dates up to five days before the current UTC date to be available. If a backfill end date is more recent, it is reduced to the latest available date. Backfill requests are split into 14-day ranges by default.
 
 ## Columns and units
 
-The following columns are available in both the raw and cleaned data. Weather variable names and units follow Open-Meteo.
+The cleaned SQLite table contains the following columns. Weather variable names and units follow Open-Meteo.
 
 | Column | Unit | Description |
 |---|---|---|
-| `time` | Local time (`Asia/Makassar`) | Hourly forecast timestamp. |
+| `location` | — | City/location name. |
+| `time` | Local time (`Asia/Makassar`) | Hourly forecast or archive timestamp. |
+| `island` | — | Island name. |
+| `province` | — | Province name. |
+| `elevation_m` | meters (m) | Location elevation returned by the API. |
 | `shortwave_radiation` | W/m² | Shortwave radiation reaching the surface. |
 | `direct_radiation` | W/m² | Direct solar radiation. |
 | `diffuse_radiation` | W/m² | Diffuse solar radiation. |
-| `cloud_cover` | % | Cloud cover, in the range 0–100%. |
+| `cloud_cover` | % | Cloud cover, from 0 to 100%. |
 | `temperature_2m` | °C | Air temperature at 2 meters above ground. |
-| `wind_speed_10m` | km/h | Wind speed at 10 meters above ground (the API's default unit). |
-| `lokasi` | — | City/location name. |
-| `pulau` | — | Island name. |
-| `provinsi` | — | Province name. |
-| `elevasi_m` | meters (m) | Location elevation returned by the API. |
+| `wind_speed_10m` | km/h | Wind speed at 10 meters above ground (API default). |
+| `source` | — | Data mode: `forecast` or `archive`. |
+| `loaded_at` | UTC timestamp | Time the row was inserted or updated by the pipeline. |
 
-The `shortwave_radiation`, `direct_radiation`, and `diffuse_radiation` columns represent radiation intensity, not energy accumulated over an hour. This dataset contains energy-related weather variables; the pipeline does not retrieve electricity generation or consumption data.
+The three radiation columns measure radiation intensity, not energy accumulated over an hour. The pipeline does not retrieve electricity generation or consumption data.
+
+## Requirements
+
+- Python 3
+- pip
+- Internet access to call the Open-Meteo APIs
+
+Dependencies are listed in [`requirements.txt`](requirements.txt).
 
 ## How to run
 
-Requirements: Python 3 and pip. Project dependencies are listed in [`requirements.txt`](requirements.txt).
+From the project root, create and activate a virtual environment (PowerShell example), then install dependencies:
 
-1. Open a terminal in the project directory, then create and activate a virtual environment (PowerShell example):
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
 
-   ```powershell
-   python -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   ```
+### Fetch the latest forecast
 
-2. Install the dependencies:
+```powershell
+python -m src.pipeline
+```
 
-   ```powershell
-   python -m pip install -r requirements.txt
-   ```
+Forecast mode is the default. It fetches forecast data, validates and cleans it, and upserts the results into the clean database.
 
-3. Launch Jupyter from the `notebooks` directory:
+### Backfill historical archive data
 
-   ```powershell
-   Set-Location notebooks
-   jupyter notebook run.ipynb
-   ```
+```powershell
+python -m src.pipeline --mode backfill --start 2025-01-01 --end 2025-01-31
+```
 
-4. In the [`notebooks/run.ipynb`](notebooks/run.ipynb) notebook, run the cells in order. The notebook fetches data from the API, creates a DataFrame, saves the raw data, cleans it, and then saves the cleaned data.
+Both `--start` and `--end` are required in backfill mode and must use the `YYYY-MM-DD` format. The pipeline stores the resulting rows with `source = archive`, separate from forecast rows in the same table.
 
-Fetching data requires an internet connection. Each run replaces the contents of the existing tables.
+### Run from the notebook
 
-## Output and cleaning
+The notebook [`notebooks/run.ipynb`](notebooks/run.ipynb) includes a pipeline example. From a notebook kernel started in the project environment, run the setup cell that adds the project root to `sys.path`, then run the `# Pipeline` cell. The CLI commands above are the recommended way to select forecast or backfill mode.
 
-- Raw data: `data/raw/energy_raw.db`, table `energy_raw`.
-- Cleaned data: `data/clean/energy_clean.db`, table `energy_clean`.
-- Cleaning removes duplicates based on location and time, clips radiation values to a minimum of zero and cloud cover to the 0–100% range, then interpolates missing numeric values separately for each location.
+## Output and processing
 
-Since the source is a forecast, use this data as a prediction for the period returned by the API. Do not interpret it as past weather measurements or a historical record.
+- Raw API responses are saved as timestamped JSON files in `data/raw/`. Forecast files use the `open_meteo_` prefix; archive files use `open_meteo_archive_`.
+- Cleaned data is stored in `data/clean/energy_clean.db`, table `energy_clean`.
+- Rows are uniquely keyed by location and time. New runs insert or update matching rows; they do not replace the entire table.
+- Cleaning removes duplicate location/time rows, clips radiation values to a minimum of zero and cloud cover to the 0–100% range, and interpolates missing numeric values per location.
+- Validation summaries and run details are written to `logs/pipeline.log`.
+
+Always check the `source` column before analysis: `forecast` rows are predictions and must not be treated as historical observations; `archive` rows come from the historical archive API.
